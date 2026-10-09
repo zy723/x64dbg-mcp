@@ -135,37 +135,59 @@ std::vector<InstructionInfo> DisassemblyEngine::DisassembleBytes(uint64_t addres
     return instructions;
 }
 
-std::vector<InstructionInfo> DisassemblyEngine::DisassembleFunction(uint64_t address) {
+std::vector<InstructionInfo> DisassemblyEngine::DisassembleFunction(uint64_t address,
+                                                                    size_t maxInstructions) {
     if (!DebugController::Instance().IsDebugging()) {
         throw DebuggerNotRunningException();
     }
-    
+
     std::vector<InstructionInfo> instructions;
     uint64_t currentAddr = address;
-    
+
     // 简单的函数边界检测: 遇到 ret 指令停止
     // 更复杂的实现需要考虑多个返回点、跳转表等
-    const size_t maxInstructions = 10000; // 防止无限循环
-    
-    for (size_t i = 0; i < maxInstructions; ++i) {
+    // 默认上限 2000 (VMP/混淆场景)，如果调用方传 0 则用 10000
+    const size_t limit = (maxInstructions > 0) ? maxInstructions : static_cast<size_t>(10000);
+
+    // 在 VMP 虚拟化函数里，单条反汇编失败很常见的数据被误识别为指令。
+    // 不要因此中止整个函数 — 失败时按 1 字节跳过，最多容忍 64 次连续失败。
+    int consecutiveFailures = 0;
+    constexpr int kMaxConsecutiveFailures = 64;
+
+    for (size_t i = 0; i < limit; ++i) {
         try {
             auto instr = DisassembleAt(currentAddr);
             instructions.push_back(instr);
-            
+            consecutiveFailures = 0;
+
             // 遇到返回指令停止
             if (instr.isRet) {
                 break;
             }
-            
+
+            if (instr.size == 0) {
+                break;
+            }
             currentAddr += instr.size;
         } catch (const MCPException& e) {
-            Logger::Warning("Failed to disassemble function at 0x{:X}: {}", currentAddr, e.what());
-            break;
+            Logger::Warning("DisasmFunction: bad byte at 0x{:X}: {} — skipping 1 byte",
+                            currentAddr, e.what());
+            // 尝试跳过 1 字节
+            if (++consecutiveFailures >= kMaxConsecutiveFailures) {
+                Logger::Warning("DisasmFunction: {} consecutive failures, aborting at 0x{:X}",
+                                consecutiveFailures, currentAddr);
+                break;
+            }
+            // 检查目标地址是否仍可读 — 不可读直接退出
+            if (!DbgMemIsValidReadPtr(currentAddr + 1)) {
+                break;
+            }
+            currentAddr += 1;
         }
     }
-    
-    Logger::Debug("Disassembled function at 0x{:X}: {} instructions", 
-                  address, instructions.size());
+
+    Logger::Debug("Disassembled function at 0x{:X}: {} instructions (limit={})",
+                  address, instructions.size(), limit);
     return instructions;
 }
 

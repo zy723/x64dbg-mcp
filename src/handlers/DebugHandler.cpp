@@ -4,10 +4,13 @@
 #include "../core/MethodDispatcher.h"
 #include "../core/RequestValidator.h"
 #include "../core/Logger.h"
+#include "../core/X64DBGBridge.h"
 #include "../utils/StringUtils.h"
 #include <windows.h>
 #include <cstdlib>
+#include <chrono>
 #include <limits>
+#include <thread>
 
 namespace MCP {
 
@@ -24,6 +27,10 @@ void DebugHandler::RegisterMethods() {
     dispatcher.RegisterMethod("debug.restart", Restart);
     dispatcher.RegisterMethod("debug.init", Init);
     dispatcher.RegisterMethod("debug.attach_pid", AttachPid);
+    dispatcher.RegisterMethod("debug.detach", Detach);
+    dispatcher.RegisterMethod("debug.get_pid", GetPid);
+    dispatcher.RegisterMethod("debug.get_exit_code", GetExitCode);
+    dispatcher.RegisterMethod("debug.run_until_break", RunUntilBreak);
     dispatcher.RegisterMethod("debug.stop", Stop);
     
     Logger::Info("Registered debug.* methods");
@@ -282,6 +289,115 @@ json DebugHandler::AttachPid(const json& params) {
     }
 
     return result;
+}
+
+json DebugHandler::Detach(const json& params) {
+    auto& controller = DebugController::Instance();
+    const int64_t timeoutMs = RequestValidator::GetInteger(params, "timeout_ms", 5000);
+    const bool success = controller.Detach(static_cast<uint32_t>(timeoutMs > 0 ? timeoutMs : 5000));
+    return {
+        {"success", success},
+        {"debugging", controller.IsDebugging()}
+    };
+}
+
+json DebugHandler::GetPid(const json& params) {
+    auto& controller = DebugController::Instance();
+    const uint32_t pid = controller.GetDebuggeeProcessId();
+    json result = {
+        {"debugging", controller.IsDebugging()},
+        {"pid", pid}
+    };
+
+#ifdef XDBG_SDK_AVAILABLE
+    // Also report process handle-derived PID as a sanity cross-check
+    HANDLE hProc = DbgGetProcessHandle();
+    if (hProc != nullptr && hProc != INVALID_HANDLE_VALUE) {
+        const DWORD handlePid = GetProcessId(hProc);
+        if (handlePid != 0) {
+            result["pid_from_handle"] = static_cast<uint32_t>(handlePid);
+            if (pid != 0 && handlePid != pid) {
+                result["pid_mismatch"] = true;
+            }
+        }
+    }
+#endif
+    return result;
+}
+
+json DebugHandler::GetExitCode(const json& params) {
+    auto& controller = DebugController::Instance();
+    const bool debugging = controller.IsDebugging();
+    json result = {{"debugging", debugging}};
+    if (!debugging) {
+        result["exited"] = false;
+        return result;
+    }
+    uint32_t exitCode = 0;
+    if (controller.GetDebuggeeExitCode(exitCode)) {
+        result["exited"] = true;
+        result["exit_code"] = exitCode;
+        result["exit_code_hex"] = StringUtils::FormatAddress(exitCode);
+    } else {
+        result["exited"] = false;
+    }
+    return result;
+}
+
+json DebugHandler::RunUntilBreak(const json& params) {
+    auto& controller = DebugController::Instance();
+    const int64_t timeoutMs = RequestValidator::GetInteger(params, "timeout_ms", 15000);
+    const int64_t clamped = timeoutMs > 120000 ? 120000 : (timeoutMs > 0 ? timeoutMs : 15000);
+
+    if (!controller.IsDebugging()) {
+        return {{"success", false}, {"error", "debugger not running"}};
+    }
+
+    // Kick off execution
+    if (!controller.Run()) {
+        return {{"success", false}, {"error", "run command failed"}};
+    }
+
+    // Poll state until paused / process exits / timeout
+    auto start = std::chrono::steady_clock::now();
+    while (true) {
+        // pump GUI messages so x64dbg command queue is processed
+        // (Pause/Wait already pumps internally; here we inline)
+        Sleep(20);
+
+        DebugState state = controller.GetState();
+        if (state == DebugState::Paused) {
+            try {
+                const uint64_t rip = controller.GetInstructionPointer();
+                return {
+                    {"success", true},
+                    {"state", "paused"},
+                    {"reason", "breakpoint_or_exception"},
+                    {ArchitectureRegisterNames::InstructionPointer, StringUtils::FormatAddress(rip)}
+                };
+            } catch (...) {
+                return {{"success", true}, {"state", "paused"}};
+            }
+        }
+        if (state == DebugState::Stopped) {
+            return {
+                {"success", false},
+                {"state", "stopped"},
+                {"reason", "process_exited_or_detached"}
+            };
+        }
+
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= clamped) {
+            return {
+                {"success", false},
+                {"state", StateToString(state)},
+                {"reason", "timeout"},
+                {"elapsed_ms", static_cast<long long>(elapsed)}
+            };
+        }
+    }
 }
 
 json DebugHandler::Stop(const json& params) {

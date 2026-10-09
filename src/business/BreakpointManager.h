@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -226,6 +227,17 @@ public:
      */
     bool ResetHitCount(uint64_t address);
 
+    /**
+     * @brief 在断点命中时由 CB_Breakpoint 调用，累计本地命中计数
+     * (BpGetFieldNumber 失败时用作 fallback)。
+     */
+    void NotifyHit(uint64_t address);
+
+    /**
+     * @brief 清除本地命中计数映射（新会话开始时调用）。
+     */
+    void ClearLocalHitCounts();
+
 private:
     BreakpointManager() = default;
     ~BreakpointManager() = default;
@@ -235,6 +247,10 @@ private:
     std::string BreakpointTypeToString(BreakpointType type);
     std::string HardwareConditionToString(HardwareBreakpointCondition condition);
     std::string GetModuleName(uint64_t address);
+
+    // 本地命中计数：当 DbgFunctions()->BpGetFieldNumber 失败时使用
+    std::map<uint64_t, uint32_t> m_localHitCounts;
+    mutable std::mutex m_localHitMutex;
 };
 
 } // namespace MCP

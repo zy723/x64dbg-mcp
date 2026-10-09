@@ -775,10 +775,31 @@ uint32_t BreakpointManager::GetHitCount(uint64_t address) {
     // 获取命中次数字段
     duint hitCount = 0;
     if (SafeDbgFunctions()->BpGetFieldNumber(&bpRef, bpf_hitcount, &hitCount)) {
-        return static_cast<uint32_t>(hitCount);
+        const uint32_t baseHit = static_cast<uint32_t>(hitCount);
+        // 合并本地计数（当 DBGFUNCTIONS 在某些 BP 类型/版本下漏报时，本地计数会更高）
+        std::lock_guard<std::mutex> lock(m_localHitMutex);
+        auto it = m_localHitCounts.find(address);
+        if (it != m_localHitCounts.end() && it->second > baseHit) {
+            return it->second;
+        }
+        return baseHit;
     }
-    
-    return 0;
+
+    // DBGFUNCTIONS fallback：尝试 register-like expression (x64dbg exposes hitcounter via $hitcounter_cond)
+    // 不再硬拼接 address 字符（该表达式不存在），改为本地 counter
+    std::lock_guard<std::mutex> lock(m_localHitMutex);
+    auto it = m_localHitCounts.find(address);
+    return it == m_localHitCounts.end() ? 0 : it->second;
+}
+
+void BreakpointManager::NotifyHit(uint64_t address) {
+    std::lock_guard<std::mutex> lock(m_localHitMutex);
+    ++m_localHitCounts[address];
+}
+
+void BreakpointManager::ClearLocalHitCounts() {
+    std::lock_guard<std::mutex> lock(m_localHitMutex);
+    m_localHitCounts.clear();
 }
 
 bool BreakpointManager::ResetHitCount(uint64_t address) {

@@ -72,6 +72,26 @@ public:
     static json AttachPid(const json& params);
 
     /**
+     * @brief debug.detach - 从当前调试目标分离（保留目标进程运行）
+     */
+    static json Detach(const json& params);
+
+    /**
+     * @brief debug.get_pid - 返回当前调试进程 PID（无调试时返回 0）
+     */
+    static json GetPid(const json& params);
+
+    /**
+     * @brief debug.get_exit_code - 返回进程退出码（仍在运行时返回 running:true）
+     */
+    static json GetExitCode(const json& params);
+
+    /**
+     * @brief debug.run_until_break - 同步运行直到 BP / exception / pause / timeout
+     */
+    static json RunUntilBreak(const json& params);
+
+    /**
      * @brief debug.stop - 停止调试
      */
     static json Stop(const json& params);

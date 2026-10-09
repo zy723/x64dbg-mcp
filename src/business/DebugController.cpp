@@ -4,7 +4,9 @@
 #include "../core/Exceptions.h"
 #include "../core/TargetValueValidator.h"
 #include "../core/X64DBGBridge.h"
+#include <chrono>
 #include <limits>
+#include <thread>
 #include <windows.h>
 
 namespace MCP {
@@ -527,9 +529,57 @@ bool DebugController::Stop() {
         Logger::Warning("Debugger is not running");
         return true;
     }
-    
+
     Logger::Debug("Stopping debugger");
     return ExecuteCommand("stop");
+}
+
+bool DebugController::Detach(uint32_t timeoutMs) {
+    if (!IsDebugging()) {
+        return true; // nothing to do
+    }
+
+    Logger::Debug("Detach requested, queue mcpdetach, wait up to {} ms", timeoutMs);
+    if (!ExecuteCommand("mcpdetach")) {
+        Logger::Error("Detach: mcpdetach enqueue failed");
+        return false;
+    }
+
+    auto start = std::chrono::steady_clock::now();
+    while (IsDebugging()) {
+        PumpGuiMessages();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeoutMs) {
+            Logger::Error("Detach: still debugging after {} ms", timeoutMs);
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+    Logger::Info("Detach: complete");
+    return true;
+}
+
+bool DebugController::GetDebuggeeExitCode(uint32_t& exitCode) const {
+    exitCode = 0;
+#ifdef XDBG_SDK_AVAILABLE
+    HANDLE processHandle = DbgGetProcessHandle();
+    if (processHandle == nullptr || processHandle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    DWORD winCode = STILL_ACTIVE;
+    if (!GetExitCodeProcess(processHandle, &winCode)) {
+        return false;
+    }
+    if (winCode == STILL_ACTIVE) {
+        return false; // process running; caller can ask "exited?" via this returning false
+    }
+    exitCode = static_cast<uint32_t>(winCode);
+    return true;
+#else
+    (void)exitCode;
+    return false;
+#endif
 }
 
 bool DebugController::IsDebugging() const {

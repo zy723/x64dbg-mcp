@@ -16,6 +16,7 @@ void RegisterHandler::RegisterMethods() {
     dispatcher.RegisterMethod("register.set", Set);
     dispatcher.RegisterMethod("register.list", List);
     dispatcher.RegisterMethod("register.get_batch", GetBatch);
+    dispatcher.RegisterMethod("register.get_all", GetAll);
     
     Logger::Info("Registered register.* methods");
 }
@@ -139,6 +140,32 @@ json RegisterHandler::GetBatch(const json& params) {
     return {
         {"registers", results},
         {"count", results.size()}
+    };
+}
+
+json RegisterHandler::GetAll(const json& params) {
+    auto& manager = RegisterManager::Instance();
+
+    // Compact {"rax":"0x...","rcx":"0x..."} for high-frequency polling.
+    // General registers only by default; set "include_extended"=true for
+    // all R/MMX/XMM/YMM/segment registers.
+    const bool extended = RequestValidator::GetBoolean(params, "include_extended", false);
+
+    std::vector<RegisterInfo> registers;
+    if (extended) {
+        registers = manager.ListAllRegisters();
+    } else {
+        registers = manager.GetGeneralRegisters();
+    }
+
+    json out = json::object();
+    for (const auto& reg : registers) {
+        out[reg.name] = StringUtils::FormatAddress(reg.value);
+    }
+
+    return {
+        {"count", registers.size()},
+        {"registers", out}
     };
 }
 

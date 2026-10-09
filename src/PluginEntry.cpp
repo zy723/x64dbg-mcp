@@ -7,6 +7,7 @@
 #include "core/MCPPromptRegistry.h"
 #include "core/X64DBGBridge.h"
 #include "business/DebugController.h"
+#include "business/BreakpointManager.h"
 #include "handlers/DebugHandler.h"
 #include "handlers/RegisterHandler.h"
 #include "handlers/MemoryHandler.h"
@@ -143,6 +144,9 @@ static void UpdateAutoStartMenuCheck() {
  */
 static void CB_InitDebug(CBTYPE cbType, void* callbackInfo) {
     Logger::Info("Debug session started");
+    // New debug session: drop stale local breakpoint hit counts so
+    // breakpoint_list reflects the new session only.
+    MCP::BreakpointManager::Instance().ClearLocalHitCounts();
 }
 
 /**
@@ -169,6 +173,13 @@ static void CB_Breakpoint(CBTYPE cbType, void* callbackInfo) {
         if (cip != 0) {
             address = static_cast<uint64_t>(cip);
         }
+    }
+
+    if (address != 0) {
+        // Track hit locally as a fallback when DBGFUNCTIONS()->BpGetFieldNumber
+        // fails to populate non-zero hit counts (observed on x64dbg builds
+        // from some snapshots).
+        MCP::BreakpointManager::Instance().NotifyHit(address);
     }
 
     EventCallbackHandler::OnBreakpoint(address);

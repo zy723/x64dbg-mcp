@@ -120,37 +120,36 @@ nlohmann::json DisassemblyHandler::Function(const nlohmann::json& params) {
     if (!params.contains("address")) {
         throw InvalidParamsException("Missing required parameter: address");
     }
-    
+
     uint64_t address = RequestValidator::GetAddress(params, "address");
-    
+    const size_t maxInstructions = params.value("max_instructions", static_cast<size_t>(2000));
+
     auto& engine = DisassemblyEngine::Instance();
     auto& resolver = SymbolResolver::Instance();
-    
-    // 鑾峰彇鍑芥暟璧峰鍦板潃
+
     auto funcStart = resolver.GetFunctionStart(address);
     if (!funcStart.has_value()) {
         funcStart = address;
     }
-    
-    // 鍙嶆眹缂栧嚱鏁?
-    auto instructions = engine.DisassembleFunction(funcStart.value());
-    
+
+    auto instructions = engine.DisassembleFunction(funcStart.value(), maxInstructions);
+
     nlohmann::json instrArray = nlohmann::json::array();
     for (const auto& instr : instructions) {
         instrArray.push_back(InstructionToJson(instr));
     }
-    
+
     nlohmann::json result;
     result["start"] = StringUtils::FormatAddress(funcStart.value());
     result["count"] = instructions.size();
+    result["max_instructions"] = maxInstructions;
     result["instructions"] = instrArray;
-    
-    // 濡傛灉鍙互鑾峰彇鍑芥暟缁撴潫鍦板潃
+
     if (!instructions.empty()) {
         auto lastInstr = instructions.back();
         result["end"] = StringUtils::FormatAddress(lastInstr.address + lastInstr.size);
     }
-    
+
     return result;
 }
 

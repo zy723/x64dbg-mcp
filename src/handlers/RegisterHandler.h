@@ -35,6 +35,12 @@ public:
      * @brief register.get_batch - 批量读取寄存器
      */
     static json GetBatch(const json& params);
+
+    /**
+     * @brief register.get_all - 紧凑返回所有 GPR {name: hex_value}
+     * 用于高频采样，比 register.list 流量更小
+     */
+    static json GetAll(const json& params);
 };
 
 } // namespace MCP

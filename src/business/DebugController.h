@@ -113,6 +113,21 @@ public:
     bool DetachProcessCore();
 
     /**
+     * @brief Detach from the current debuggee (high-level, RPC-safe).
+     * Enqueues mcpdetach on the plugin command thread, then waits for
+     * DbgIsDebugging() to become false. Returns true if we ended up
+     * NOT debugging (either we already weren't, or detach succeeded).
+     */
+    bool Detach(uint32_t timeoutMs = 5000);
+
+    /**
+     * @brief Get the debuggee's exit code. Returns true + sets exitCode when
+     * the process has terminated; returns false when still running (or when
+     * no debug session exists).
+     */
+    bool GetDebuggeeExitCode(uint32_t& exitCode) const;
+
+    /**
      * @brief 当前被调试进程 PID（来自 x64dbg $pid），未调试时返回 0
      */
     uint32_t GetDebuggeeProcessId() const;

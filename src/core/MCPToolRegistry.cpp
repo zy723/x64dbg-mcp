@@ -257,6 +257,38 @@ void MCPToolRegistry::RegisterDefaultTools() {
     });
 
     RegisterTool({
+        "debug_detach",
+        "Detach the debugger from the current process (debuggee keeps running). Wait until DbgIsDebugging() becomes false.",
+        "debug.detach",
+        {
+            {"timeout_ms", "integer", "Max wait for detach acknowledgement (default 5000)", false, 5000, nullptr}
+        }
+    });
+
+    RegisterTool({
+        "debug_get_pid",
+        "Get the PID of the current debuggee (0 if not debugging).",
+        "debug.get_pid",
+        {}
+    });
+
+    RegisterTool({
+        "debug_get_exit_code",
+        "Get the exit code of the debuggee if it has terminated. Returns {exited:false} if still running.",
+        "debug.get_exit_code",
+        {}
+    });
+
+    RegisterTool({
+        "debug_run_until_break",
+        "Continue execution and block until the debugger pauses (breakpoint, exception, single step) or times out. Returns the new instruction pointer when paused.",
+        "debug.run_until_break",
+        {
+            {"timeout_ms", "integer", "Max wait for pause (default 15000, max 120000)", false, 15000, nullptr}
+        }
+    });
+
+    RegisterTool({
         "debug_stop",
         "Stop debugging and close target process",
         "debug.stop",
@@ -297,11 +329,20 @@ void MCPToolRegistry::RegisterDefaultTools() {
         "Read multiple registers at once",
         "register.get_batch",
         {
-            {"names", "array", "Array of register names", true, nullptr, nullptr, 
+            {"names", "array", "Array of register names", true, nullptr, nullptr,
              json{{"type", "string"}}}
         }
     });
-    
+
+    RegisterTool({
+        "register_get_all",
+        "Compact snapshot of general-purpose registers as {name: hex_value}. Use this for high-frequency polling where register_list is too verbose.",
+        "register.get_all",
+        {
+            {"include_extended", "boolean", "Include MMX/XMM/YMM/segment registers (default false)", false, false, nullptr}
+        }
+    });
+
     // 3. Memory Tools
     RegisterTool({
         "memory_read",

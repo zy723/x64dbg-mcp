@@ -62,9 +62,10 @@ public:
     /**
      * @brief 反汇编一个函数
      * @param address 函数地址
+     * @param maxInstructions 上限（默认 2000；<=0 时不限）
      * @return 指令列表
      */
-    std::vector<InstructionInfo> DisassembleFunction(uint64_t address);
+    std::vector<InstructionInfo> DisassembleFunction(uint64_t address, size_t maxInstructions = 2000);
     
     /**
      * @brief 获取指令长度

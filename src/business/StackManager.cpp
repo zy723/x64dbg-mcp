@@ -17,39 +17,63 @@ StackManager& StackManager::Instance() {
 }
 
 std::vector<StackFrame> StackManager::GetStackTrace(size_t maxDepth) {
-    std::vector<StackFrame> frames;
-    
     // 检查调试器状态
     if (!DbgIsDebugging()) {
         throw DebuggerNotRunningException("Debugger is not debugging");
     }
-    
+
     if (DbgIsRunning()) {
         throw DebuggerNotPausedException("Debugger must be paused to get stack trace");
     }
-    
+
     try {
-        // 使用 x64dbg Script API 获取调用栈
-        Script::Debug::Wait();  // 确保已暂停
-        
-        // 获取当前线程的调用栈
-        // x64dbg 内部会自动分析调用栈
-        DBGCALLSTACK callstack;
-        memset(&callstack, 0, sizeof(callstack));
-        
-        // 通过 DbgFunctions 获取调用栈
-        if (!DbgFunctions()->GetCallStack) {
-            LOG_WARNING("GetCallStack function not available, using manual stack walk");
-            // 如果 API 不可用，使用手动方式
-            return GetStackTraceManual(maxDepth);
+        // 优先使用 x64dbg DBGFUNCTIONS 提供的 GetCallStack/GetCallStackEx
+        // 该 API 由 x64dbg CallStackView 模块维护，比 manual RBP walker
+        // 在 VMP/混淆/无 BP 链的样本上更可靠。
+        DBGCALLSTACK callstack{};
+        bool apiUsed = false;
+
+        if (DbgFunctions()->GetCallStackEx) {
+            DbgFunctions()->GetCallStackEx(&callstack, true);
+            apiUsed = callstack.total > 0 && callstack.entries != nullptr;
         }
-        
-        // 尝试使用内置函数获取调用栈
-        // 注意：这个 API 可能在某些版本不可用，需要降级处理
-        
-        // 手动栈回溯作为主要实现
+        if (!apiUsed && DbgFunctions()->GetCallStack) {
+            memset(&callstack, 0, sizeof(callstack));
+            DbgFunctions()->GetCallStack(&callstack);
+            apiUsed = callstack.total > 0 && callstack.entries != nullptr;
+        }
+
+        if (apiUsed) {
+            std::vector<StackFrame> frames;
+            const size_t limit = (maxDepth > 0 && maxDepth < static_cast<size_t>(callstack.total))
+                ? maxDepth
+                : static_cast<size_t>(callstack.total);
+            frames.reserve(limit);
+            for (size_t i = 0; i < limit; ++i) {
+                const DBGCALLSTACKENTRY& e = callstack.entries[i];
+                StackFrame f{};
+                f.address = static_cast<uint64_t>(e.addr);
+                f.from    = static_cast<uint64_t>(e.from);
+                f.to      = static_cast<uint64_t>(e.to);
+                f.comment = (e.comment[0] != '\0') ? e.comment : ResolveSymbol(f.address);
+                // DbgCallstack 不直接暴露 RSP/RBP；保留 0
+                f.rsp = 0;
+                f.rbp = 0;
+                f.isUser = true;
+                f.party  = 0;
+                frames.push_back(std::move(f));
+            }
+            if (callstack.entries) {
+                BridgeFree(callstack.entries);
+            }
+            LOG_DEBUG("Stack trace via DbgFunctions()->GetCallStack: {} frames", frames.size());
+            if (!frames.empty()) {
+                return frames;
+            }
+        }
+
+        // 降级：手动 RBP 链回溯
         return GetStackTraceManual(maxDepth);
-        
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to get stack trace: {}", e.what());
         throw;
