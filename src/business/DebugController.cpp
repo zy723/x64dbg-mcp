@@ -457,8 +457,27 @@ bool DebugController::AttachProcess(uint32_t pid,
 
     const uint32_t waitMs = timeoutMs > 0 ? timeoutMs : 30000;
     if (!WaitForDebugging(waitMs)) {
-        Logger::Error("AttachProcess: DbgIsDebugging still false after {} ms", waitMs);
-        return false;
+        // x64dbg internal attach state can wedge after a previously-failed
+        // attach (observed live: 2nd AttachProcess to the same pid never
+        // transitions DbgIsDebugging to true). Send explicit StopDebug to
+        // flush + retry the mcpattach once before giving up.
+        Logger::Warning(
+            "AttachProcess: first attempt timed out after {} ms — issuing stop+retry",
+            waitMs
+        );
+        ExecuteCommandDirect("stop");
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        PumpGuiMessages();
+
+        if (!ExecuteCommand(pluginCmd)) {
+            Logger::Error("AttachProcess: retry enqueue failed");
+            return false;
+        }
+        if (!WaitForDebugging(waitMs)) {
+            Logger::Error("AttachProcess: DbgIsDebugging still false after retry ({} ms)", waitMs);
+            return false;
+        }
+        Logger::Info("AttachProcess: retry succeeded");
     }
 
     // attach 后通常在系统断点暂停；attach_break 仅表示多等一等暂停态
@@ -575,11 +594,32 @@ bool DebugController::GetDebuggeeExitCode(uint32_t& exitCode) const {
         return false; // process running; caller can ask "exited?" via this returning false
     }
     exitCode = static_cast<uint32_t>(winCode);
+    {
+        std::lock_guard<std::mutex> lock(m_exitCodeMutex);
+        m_lastExitCode = exitCode;
+        m_hasLastExitCode = true;
+    }
     return true;
 #else
     (void)exitCode;
     return false;
 #endif
+}
+
+uint32_t DebugController::GetLastExitCode() const {
+    std::lock_guard<std::mutex> lock(m_exitCodeMutex);
+    return m_lastExitCode;
+}
+
+bool DebugController::HasLastExitCode() const {
+    std::lock_guard<std::mutex> lock(m_exitCodeMutex);
+    return m_hasLastExitCode;
+}
+
+void DebugController::ClearLastExitCode() {
+    std::lock_guard<std::mutex> lock(m_exitCodeMutex);
+    m_hasLastExitCode = false;
+    m_lastExitCode = 0;
 }
 
 bool DebugController::IsDebugging() const {

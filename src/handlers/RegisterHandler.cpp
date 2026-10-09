@@ -146,9 +146,11 @@ json RegisterHandler::GetBatch(const json& params) {
 json RegisterHandler::GetAll(const json& params) {
     auto& manager = RegisterManager::Instance();
 
-    // Compact {"rax":"0x...","rcx":"0x..."} for high-frequency polling.
-    // General registers only by default; set "include_extended"=true for
-    // all R/MMX/XMM/YMM/segment registers.
+    // Compact {"rax":"0x...",...,"rip":"0x..."} for high-frequency polling.
+    // cip + cflags are ALWAYS included because a register snapshot is
+    // meaningless for stepping/disasm without them.
+    // - default:        general-purpose + cip + cflags
+    // - include_extended=true: everything cip+cflags+segments+MMX+XMM+YMM
     const bool extended = RequestValidator::GetBoolean(params, "include_extended", false);
 
     std::vector<RegisterInfo> registers;
@@ -156,6 +158,20 @@ json RegisterHandler::GetAll(const json& params) {
         registers = manager.ListAllRegisters();
     } else {
         registers = manager.GetGeneralRegisters();
+        // Append cip + cflags since GetGeneralRegisters filters them out.
+#ifdef XDBG_ARCH_X64
+        const char* ipName = "rip";
+        const char* flagsName = "rflags";
+#else
+        const char* ipName = "eip";
+        const char* flagsName = "eflags";
+#endif
+        try {
+            registers.push_back(manager.GetRegisterInfo(ipName));
+        } catch (...) {}
+        try {
+            registers.push_back(manager.GetRegisterInfo(flagsName));
+        } catch (...) {}
     }
 
     json out = json::object();

@@ -328,20 +328,36 @@ json DebugHandler::GetPid(const json& params) {
 json DebugHandler::GetExitCode(const json& params) {
     auto& controller = DebugController::Instance();
     const bool debugging = controller.IsDebugging();
-    json result = {{"debugging", debugging}};
-    if (!debugging) {
-        result["exited"] = false;
-        return result;
-    }
+
     uint32_t exitCode = 0;
-    if (controller.GetDebuggeeExitCode(exitCode)) {
-        result["exited"] = true;
-        result["exit_code"] = exitCode;
-        result["exit_code_hex"] = StringUtils::FormatAddress(exitCode);
-    } else {
-        result["exited"] = false;
+    if (debugging && controller.GetDebuggeeExitCode(exitCode)) {
+        return {
+            {"debugging", true},
+            {"exited", true},
+            {"exit_code", exitCode},
+            {"exit_code_hex", StringUtils::FormatAddress(exitCode)}
+        };
     }
-    return result;
+
+    // Either still running (STILL_ACTIVE) or session just ended.
+    // Fall back to the last-cached exit code if we recorded one earlier —
+    // handle becomes invalid the moment DbgIsDebugging flips false so the
+    // live query above is unreachable after stop.
+    if (controller.HasLastExitCode()) {
+        const uint32_t cached = controller.GetLastExitCode();
+        return {
+            {"debugging", false},
+            {"exited", true},
+            {"exit_code", cached},
+            {"exit_code_hex", StringUtils::FormatAddress(cached)},
+            {"cached", true}
+        };
+    }
+
+    return {
+        {"debugging", debugging},
+        {"exited", false}
+    };
 }
 
 json DebugHandler::RunUntilBreak(const json& params) {

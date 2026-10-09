@@ -124,8 +124,24 @@ public:
      * @brief Get the debuggee's exit code. Returns true + sets exitCode when
      * the process has terminated; returns false when still running (or when
      * no debug session exists).
+     *
+     * The last-seen non-STILL_ACTIVE code is cached in m_lastExitCode so a
+     * caller querying after DbgIsDebugging() has flipped to false (typical
+     * post-stop poll) can still tell whether the target actually exited.
      */
     bool GetDebuggeeExitCode(uint32_t& exitCode) const;
+
+    /**
+     * @brief Last known exit code (0 = never observed). Valid when
+     * HasLastExitCode() returns true.
+     */
+    uint32_t GetLastExitCode() const;
+    bool HasLastExitCode() const;
+    /**
+     * @brief Drop any cached exit code. Called from CB_StopDebug so a stale
+     * code from a prior session can't leak into a new one.
+     */
+    void ClearLastExitCode();
 
     /**
      * @brief 当前被调试进程 PID（来自 x64dbg $pid），未调试时返回 0
@@ -172,6 +188,10 @@ private:
 
     mutable std::mutex m_lastPathMutex;
     std::string m_lastDebuggedPath;
+
+    mutable std::mutex m_exitCodeMutex;
+    mutable bool m_hasLastExitCode = false;
+    mutable uint32_t m_lastExitCode = 0;
 
     void CacheLastDebuggedPath(const std::string& path);
     std::string LoadLastDebuggedPath() const;

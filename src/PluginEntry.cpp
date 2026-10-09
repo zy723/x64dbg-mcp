@@ -147,6 +147,9 @@ static void CB_InitDebug(CBTYPE cbType, void* callbackInfo) {
     // New debug session: drop stale local breakpoint hit counts so
     // breakpoint_list reflects the new session only.
     MCP::BreakpointManager::Instance().ClearLocalHitCounts();
+    // Same for the cached exit code — a fresh session must not report the
+    // previous target's exit code as its own.
+    MCP::DebugController::Instance().ClearLastExitCode();
 }
 
 /**
@@ -154,6 +157,15 @@ static void CB_InitDebug(CBTYPE cbType, void* callbackInfo) {
  */
 static void CB_StopDebug(CBTYPE cbType, void* callbackInfo) {
     Logger::Info("Debug session stopped");
+    // Final chance to capture the exit code if CB_EXITPROCESS didn't get a
+    // valid one (e.g. user hit "stop" rather than letting the process exit).
+    // If this fails because the handle is already gone, the cached value from
+    // CB_EXITPROCESS — if any — stays in place for post-stop RPC queries.
+    uint32_t exitCode = 0;
+    if (MCP::DebugController::Instance().IsDebugging() &&
+        MCP::DebugController::Instance().GetDebuggeeExitCode(exitCode)) {
+        Logger::Info("StopDebug: captured exit code 0x{:X}", exitCode);
+    }
 }
 
 /**
@@ -278,6 +290,14 @@ static void CB_CreateProcess(CBTYPE cbType, void* callbackInfo) {
  * @brief x64dbg 鍥炶�? 杩涚▼閫€鍑?
  */
 static void CB_ExitProcess(CBTYPE cbType, void* callbackInfo) {
+    // Capture the exit code NOW while the debuggee's process handle is still
+    // open. Once CB_STOPDEBUG fires the handle is closed and GetExitCodeProcess
+    // becomes unreliable, so DebugController::GetDebuggeeExitCode would no
+    // longer be reachable from a "process just exited" RPC poll.
+    uint32_t exitCode = 0;
+    if (MCP::DebugController::Instance().GetDebuggeeExitCode(exitCode)) {
+        Logger::Info("Process exited with code 0x{:X}", exitCode);
+    }
     EventCallbackHandler::OnExitProcess();
 }
 

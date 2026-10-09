@@ -121,16 +121,31 @@ nlohmann::json StackHandler::IsOnStack(const nlohmann::json& params) {
 
 nlohmann::json StackHandler::FormatStackFrame(const StackFrame& frame) {
     nlohmann::json j;
-    
+
     j["address"] = StringUtils::FormatAddress(frame.address);
     j["from"] = StringUtils::FormatAddress(frame.from);
     j["to"] = StringUtils::FormatAddress(frame.to);
-    j["comment"] = frame.comment;
-    j[ArchitectureRegisterNames::StackPointer] = StringUtils::FormatAddress(frame.rsp);
-    j[ArchitectureRegisterNames::BasePointer] = StringUtils::FormatAddress(frame.rbp);
-    j["is_user"] = frame.isUser;
-    j["party"] = frame.party;
-    
+    if (!frame.comment.empty()) {
+        j["comment"] = frame.comment;
+    }
+
+    // When the frame came from DbgFunctions()->GetCallStack(Ex), rsp/rbp/
+    // is_user/party are not provided by the bridge and were zero-filled by
+    // StackManager. Omit them rather than emit misleading zeros so callers
+    // can distinguish "absent" from "actually zero".
+    if (frame.rsp != 0) {
+        j[ArchitectureRegisterNames::StackPointer] = StringUtils::FormatAddress(frame.rsp);
+    }
+    if (frame.rbp != 0) {
+        j[ArchitectureRegisterNames::BasePointer] = StringUtils::FormatAddress(frame.rbp);
+    }
+    if (frame.rsp != 0 || frame.rbp != 0) {
+        // These flags only mirror the manual-RBP-walker path; GetCallStack-
+        // derived frames leave them at placeholder values (true / 0).
+        j["is_user"] = frame.isUser;
+        j["party"] = frame.party;
+    }
+
     return j;
 }
 
