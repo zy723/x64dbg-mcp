@@ -511,7 +511,15 @@ static bool CmdMcpAttachBreak(int argc, char** argv) {
 static bool CmdMcpDetach(int argc, char** argv) {
     (void)argc;
     (void)argv;
-    return DebugController::Instance().DetachProcessCore();
+    // Do NOT call DetachProcessCore() here — that function runs
+    // ExecuteCommandDirect("detach") + Sleep(200) + ExecuteCommandDirect
+    // ("stop") which, when invoked from a GUI-thread command handler,
+    // re-enters x64dbg's command queue while the queue is still processing
+    // *this* command and crashes the host process (observed live).
+    // Instead, simply issue the built-in "detach" command queue entry.
+    // x64dbg will complete the detach on the next loop iteration.
+    DbgCmdExec("detach");
+    return true;
 }
 
 } // namespace MCP

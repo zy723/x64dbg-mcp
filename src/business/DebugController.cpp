@@ -340,14 +340,28 @@ bool DebugController::DetachProcessCore() {
     if (!IsDebugging()) {
         return true;
     }
-    Logger::Debug("DetachProcessCore: detach/stop");
-    ExecuteCommandDirect("detach");
-    Sleep(200);
-    if (IsDebugging()) {
-        ExecuteCommandDirect("stop");
-        Sleep(200);
+    Logger::Debug("DetachProcessCore: direct detach (no pump, no nested cmd)");
+    // Issue "detach" via DbgCmdExecDirect — synchronous from this thread,
+    // does NOT enqueue on the GUI thread's command queue so we can't
+    // deadlock or re-enter. Sleep + polling without PumpGuiMessages to
+    // give x64dbg's debug loop time to transition state.
+#ifdef XDBG_SDK_AVAILABLE
+    DbgCmdExecDirect("detach");
+    auto start = std::chrono::steady_clock::now();
+    while (IsDebugging()) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= 3000) {
+            // Last resort: force stop; detach semantics already attempted.
+            DbgCmdExecDirect("stop");
+            return !IsDebugging();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    return !IsDebugging();
+    return true;
+#else
+    return false;
+#endif
 }
 
 bool DebugController::AttachProcessCore(uint32_t pid, bool useAttachBreak, bool detachFirst) {
@@ -428,21 +442,25 @@ bool DebugController::AttachProcess(uint32_t pid,
             return false;
         }
         Logger::Debug("AttachProcess: detaching before attach");
-        if (!ExecuteCommand("mcpdetach")) {
-            Logger::Error("AttachProcess: mcpdetach enqueue failed");
-            return false;
-        }
+        // Use DbgCmdExecDirect instead of ExecuteCommand("mcpdetach") —
+        // mcpdetach enters the GUI queue which may not be serviceable from
+        // this (worker) thread's perspective and the old PumpGuiMessages
+        // fallback crashes the host.
+#ifdef XDBG_SDK_AVAILABLE
+        DbgCmdExecDirect("detach");
+#else
+        ExecuteCommand("detach");
+#endif
         const uint32_t waitMs = timeoutMs > 0 ? timeoutMs : 15000;
         auto start = std::chrono::steady_clock::now();
         while (IsDebugging()) {
-            PumpGuiMessages();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - start).count();
             if (elapsed >= waitMs) {
                 Logger::Error("AttachProcess: detach timed out");
                 return false;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
 
@@ -465,9 +483,12 @@ bool DebugController::AttachProcess(uint32_t pid,
             "AttachProcess: first attempt timed out after {} ms — issuing stop+retry",
             waitMs
         );
+#ifdef XDBG_SDK_AVAILABLE
+        DbgCmdExecDirect("stop");
+#else
         ExecuteCommandDirect("stop");
+#endif
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        PumpGuiMessages();
 
         if (!ExecuteCommand(pluginCmd)) {
             Logger::Error("AttachProcess: retry enqueue failed");
@@ -558,23 +579,36 @@ bool DebugController::Detach(uint32_t timeoutMs) {
         return true; // nothing to do
     }
 
-    Logger::Debug("Detach requested, queue mcpdetach, wait up to {} ms", timeoutMs);
-    if (!ExecuteCommand("mcpdetach")) {
-        Logger::Error("Detach: mcpdetach enqueue failed");
-        return false;
-    }
-
+    Logger::Debug("Detach requested, direct detach (no pump)");
+    // Dispatch detach DIRECTLY without going through the plugin command queue.
+    // The previous implementation called ExecuteCommand("mcpdetach") which
+    // enqueued a `CmdMcpDetach` handler on the GUI thread that then ran
+    // `ExecuteCommandDirect("detach") + Sleep(200) + ExecuteCommandDirect
+    // ("stop")` from inside that GUI handler. Meanwhile the RPC worker
+    // thread (this Detach) was spinning PumpGuiMessages()/PeekMessage on a
+    // thread that owns no message queue, which corrupted x64dbg's re-entrancy
+    // state and crashed the debugger process (observed live on detach after
+    // external taskkill of debuggee).
+    // DbgCmdExecDirect is documented as a synchronous thread-safe call
+    // suitable for non-GUI threads.
+#ifdef XDBG_SDK_AVAILABLE
+    DbgCmdExecDirect("detach");
+    // x64dbg's detach is asynchronous internally — wait briefly for state
+    // transition WITHOUT pumping GUI messages from this (RPC) thread. Sleep
+    // is fine; PumpGuiMessages is what crashed the host.
     auto start = std::chrono::steady_clock::now();
     while (IsDebugging()) {
-        PumpGuiMessages();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count();
         if (elapsed >= timeoutMs) {
             Logger::Error("Detach: still debugging after {} ms", timeoutMs);
             return false;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+#else
+    (void)timeoutMs;
+#endif
     Logger::Info("Detach: complete");
     return true;
 }
