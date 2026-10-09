@@ -182,7 +182,6 @@ private:
     
     bool ExecuteCommand(const std::string& command);
     bool ExecuteCommandDirect(const std::string& command);
-    static void PumpGuiMessages();
     bool WaitForDebugging(uint32_t timeoutMs);
     bool WaitForPause(uint32_t timeoutMs = 5000);
 

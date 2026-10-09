@@ -688,33 +688,15 @@ bool DebugController::ExecuteCommandDirect(const std::string& command) {
     return result;
 }
 
-void DebugController::PumpGuiMessages() {
-#ifdef XDBG_SDK_AVAILABLE
-    // CAUTION: This is called from HTTP worker threads during attach polling.
-    // DbgUpdateGui is documented as thread-safe by the x64dbg SDK. PeekMessage
-    // with nullptr HWND dispatches only messages for the calling thread, which
-    // is fine for interop with x64dbg's command queue processing.
-    GuiUpdateAllViews();
-
-    HWND hwnd = GuiGetWindowHandle();
-    if (hwnd == nullptr) {
-        return;
-    }
-
-    MSG msg = {};
-    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-    }
-#endif
-}
-
 bool DebugController::WaitForDebugging(uint32_t timeoutMs) {
     auto start = std::chrono::steady_clock::now();
 
     while (true) {
-        PumpGuiMessages();
-
+        // No PumpGuiMessages() here: this runs on RPC/HTTP worker threads.
+        // PeekMessage/DispatchMessage from a non-GUI thread can dispatch
+        // messages to windows owned by other threads and caused the rc2
+        // detach host crash. DbgIsDebugging() reads internal debugger state
+        // directly and needs no GUI pumping.
         if (IsDebugging()) {
             return true;
         }
@@ -733,22 +715,21 @@ bool DebugController::WaitForDebugging(uint32_t timeoutMs) {
 
 bool DebugController::WaitForPause(uint32_t timeoutMs) {
     auto start = std::chrono::steady_clock::now();
-    
-    while (true) {
-        PumpGuiMessages();
 
+    while (true) {
+        // No PumpGuiMessages() — same reason as WaitForDebugging above.
         if (IsPaused()) {
             return true;
         }
-        
+
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-        
+
         if (elapsed >= timeoutMs) {
             Logger::Warning("Wait for pause timed out after {} ms", timeoutMs);
             return false;
         }
-        
+
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }

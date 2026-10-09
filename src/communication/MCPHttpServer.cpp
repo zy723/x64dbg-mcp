@@ -502,6 +502,20 @@ void MCPHttpServer::ServerLoop() {
             m_activeClientSockets.insert(clientSocket);
         }
 
+        // Guard against slow/stalled clients: without a receive timeout a
+        // half-open connection would pin its worker thread in recv() forever
+        // (observed as intermittent "ETIMEDOUT" from MCP clients while the
+        // HTTP channel itself was healthy).
+        DWORD recvTimeoutMs = 30000;
+        setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&recvTimeoutMs), sizeof(recvTimeoutMs));
+        DWORD sendTimeoutMs = 30000;
+        setsockopt(clientSocket, SOL_SOCKET, SO_SNDTIMEO,
+                   reinterpret_cast<const char*>(&sendTimeoutMs), sizeof(sendTimeoutMs));
+        int keepAlive = 1;
+        setsockopt(clientSocket, SOL_SOCKET, SO_KEEPALIVE,
+                   reinterpret_cast<const char*>(&keepAlive), sizeof(keepAlive));
+
         auto task = std::async(std::launch::async, [this, clientSocket]() {
             try {
                 HandleClient(clientSocket);
